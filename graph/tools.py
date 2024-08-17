@@ -1,10 +1,15 @@
+#  Copyright (c) 2024. IPCRC, Lab. Jiangnig Wei
+#  All rights reserved
+
 import numpy as np
+
 
 def edge2mat(link, num_node):
     A = np.zeros((num_node, num_node))
     for i, j in link:
         A[j, i] = 1
     return A
+
 
 def normalize_digraph(A):
     Dl = np.sum(A, 0)
@@ -16,6 +21,7 @@ def normalize_digraph(A):
     AD = np.dot(A, Dn)
     return AD
 
+
 def get_spatial_graph(num_node, hierarchy):
     A = []
     for i in range(len(hierarchy)):
@@ -25,6 +31,7 @@ def get_spatial_graph(num_node, hierarchy):
 
     return A
 
+
 def get_spatial_graph_original(num_node, self_link, inward, outward):
     I = edge2mat(self_link, num_node)
     In = normalize_digraph(edge2mat(inward, num_node))
@@ -32,19 +39,21 @@ def get_spatial_graph_original(num_node, self_link, inward, outward):
     A = np.stack((I, In, Out))
     return A
 
+
 def normalize_adjacency_matrix(A):
     node_degrees = A.sum(-1)
     degs_inv_sqrt = np.power(node_degrees, -0.5)
     norm_degs_matrix = np.eye(len(node_degrees)) * degs_inv_sqrt
     return (norm_degs_matrix @ A @ norm_degs_matrix).astype(np.float32)
 
-def get_graph(num_node, edges):
 
+def get_graph(num_node, edges):
     I = edge2mat(edges[0], num_node)
     Forward = normalize_digraph(edge2mat(edges[1], num_node))
     Reverse = normalize_digraph(edge2mat(edges[2], num_node))
     A = np.stack((I, Forward, Reverse))
-    return A # 3, 25, 25
+    return A  # 3, 25, 25
+
 
 def get_hierarchical_graph(num_node, edges):
     A = []
@@ -53,9 +62,10 @@ def get_hierarchical_graph(num_node, edges):
     A = np.stack(A)
     return A
 
+
 def get_groups(dataset='NTU', CoM=21):
-    groups  =[]
-    
+    groups = []
+
     if dataset == 'NTU':
         if CoM == 2:
             groups.append([2])
@@ -88,12 +98,23 @@ def get_groups(dataset='NTU', CoM=21):
 
         else:
             raise ValueError()
-        
+
+    if dataset == "pingpong-coco":
+        if CoM == 1:
+            groups.append([1])  # 0
+            groups.append([2, 3, 6, 7])  # 1 2 5 6
+            groups.append([4, 5, 8, 9, 12, 13])  # 3 4 7 8 11 12
+            groups.append([10, 11, 14, 15])  # 9 10 13 14
+            groups.append([16, 17])  # 15 16
+        else:
+            raise ValueError()
+
     return groups
+
 
 def get_edgeset(dataset='NTU', CoM=21):
     groups = get_groups(dataset=dataset, CoM=CoM)
-    
+
     for i, group in enumerate(groups):
         group = [i - 1 for i in group]
         groups[i] = group
@@ -111,7 +132,7 @@ def get_edgeset(dataset='NTU', CoM=21):
             for k in groups[i + 1]:
                 forward_g.append((j, k))
         forward_hierarchy.append(forward_g)
-        
+
         reverse_g = []
         for j in groups[-1 - i]:
             for k in groups[-2 - i]:

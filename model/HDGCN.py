@@ -1,3 +1,6 @@
+#  Copyright (c) 2024. IPCRC, Lab. Jiangnig Wei
+#  All rights reserved
+
 import torch
 import torch.nn as nn
 import math
@@ -9,6 +12,7 @@ from einops import rearrange, repeat
 from einops.layers.torch import Rearrange
 
 from graph.tools import get_groups
+
 
 def import_class(name):
     components = name.split('.')
@@ -52,8 +56,8 @@ def weights_init(m):
             m.weight.data.normal_(1.0, 0.02)
         if hasattr(m, 'bias') and m.bias is not None:
             m.bias.data.fill_(0)
-            
-            
+
+
 class TemporalConv(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, dilation=1):
         super(TemporalConv, self).__init__()
@@ -82,7 +86,7 @@ class MultiScale_TemporalConv(nn.Module):
                  out_channels,
                  kernel_size=5,
                  stride=1,
-                 dilations=[1,2],
+                 dilations=[1, 2],
                  residual=True,
                  residual_kernel_size=1):
 
@@ -168,124 +172,124 @@ class residual_conv(nn.Module):
         x = self.bn(self.conv(x))
         return x
 
+
 class EdgeConv(nn.Module):
     def __init__(self, in_channels, out_channels, k):
         super(EdgeConv, self).__init__()
-        
+
         self.k = k
-        
+
         self.conv = nn.Sequential(
-            nn.Conv2d(in_channels*2, out_channels, kernel_size=1, bias=False),
+            nn.Conv2d(in_channels * 2, out_channels, kernel_size=1, bias=False),
             nn.BatchNorm2d(out_channels),
             nn.LeakyReLU(inplace=True, negative_slope=0.2)
         )
-        
+
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 conv_init(m)
             elif isinstance(m, nn.BatchNorm2d):
                 bn_init(m, 1)
-    
-    def forward(self, x, dim=4): # N, C, T, V
-        
+
+    def forward(self, x, dim=4):  # N, C, T, V
+
         if dim == 3:
             N, C, L = x.size()
             pass
         else:
             N, C, T, V = x.size()
-            x = x.mean(dim=-2, keepdim=False) # N, C, V
-        
+            x = x.mean(dim=-2, keepdim=False)  # N, C, V
+
         x = self.get_graph_feature(x, self.k)
         x = self.conv(x)
         x = x.max(dim=-1, keepdim=False)[0]
-        
+
         if dim == 3:
             pass
         else:
             x = repeat(x, 'n c v -> n c t v', t=T)
-        
+
         return x
-        
+
     def knn(self, x, k):
 
-        inner = -2 * torch.matmul(x.transpose(2, 1), x) # N, V, V
-        xx = torch.sum(x**2, dim=1, keepdim=True)
+        inner = -2 * torch.matmul(x.transpose(2, 1), x)  # N, V, V
+        xx = torch.sum(x ** 2, dim=1, keepdim=True)
         pairwise_distance = - xx - inner - xx.transpose(2, 1)
-        
-        idx = pairwise_distance.topk(k=k, dim=-1)[1] # N, V, k
+
+        idx = pairwise_distance.topk(k=k, dim=-1)[1]  # N, V, k
         return idx
-    
+
     def get_graph_feature(self, x, k, idx=None):
         N, C, V = x.size()
         if idx is None:
             idx = self.knn(x, k=k)
         device = x.get_device()
-        
+
         idx_base = torch.arange(0, N, device=device).view(-1, 1, 1) * V
-        
+
         idx = idx + idx_base
         idx = idx.view(-1)
-        
+
         x = rearrange(x, 'n c v -> n v c')
         feature = rearrange(x, 'n v c -> (n v) c')[idx, :]
         feature = feature.view(N, V, k, C)
         x = repeat(x, 'n v c -> n v k c', k=k)
-        
+
         feature = torch.cat((feature - x, x), dim=3)
         feature = rearrange(feature, 'n v k c -> n c v k')
-        
+
         return feature
-    
+
 
 class AHA(nn.Module):
     def __init__(self, in_channels, num_layers, CoM):
         super(AHA, self).__init__()
-        
+
         self.num_layers = num_layers
-        
-        groups = get_groups(dataset='NTU', CoM=CoM)
+        # TODO change with dataset
+        groups = get_groups(dataset='pingpong-coco', CoM=CoM)
 
         for i, group in enumerate(groups):
             group = [i - 1 for i in group]
             groups[i] = group
-            
+
         inter_channels = in_channels // 4
-            
+
         self.layers = [groups[i] + groups[i + 1] for i in range(len(groups) - 1)]
-        
+
         self.conv_down = nn.Sequential(
             nn.Conv2d(in_channels, inter_channels, kernel_size=1),
             nn.BatchNorm2d(inter_channels),
             nn.ReLU(inplace=True)
         )
-        
+
         self.edge_conv = EdgeConv(inter_channels, inter_channels, k=3)
-        
+
         self.aggregate = nn.Conv1d(inter_channels, in_channels, kernel_size=1)
         self.sigmoid = nn.Sigmoid()
-        
-        
-        
+
     def forward(self, x):
         N, C, L, T, V = x.size()
-        
+
         x_t = x.max(dim=-2, keepdim=False)[0]
         x_t = self.conv_down(x_t)
-        
+
         x_sampled = []
         for i in range(self.num_layers):
+            # print("x_t shape: ", x_t.shape)
+            # print("self.layers: ", self.layers[i])
             s_t = x_t[:, :, i, self.layers[i]]
             s_t = s_t.mean(dim=-1, keepdim=True)
             x_sampled.append(s_t)
         x_sampled = torch.cat(x_sampled, dim=2)
-        
+
         att = self.edge_conv(x_sampled, dim=3)
         att = self.aggregate(att).view(N, C, L, 1, 1)
-        
+
         out = (x * self.sigmoid(att)).sum(dim=2, keepdim=False)
-        
+
         return out
-        
 
 
 class HD_Gconv(nn.Module):
@@ -293,12 +297,12 @@ class HD_Gconv(nn.Module):
         super(HD_Gconv, self).__init__()
         self.num_layers = A.shape[0]
         self.num_subset = A.shape[1]
-        
+
         self.att = att
-        
+
         inter_channels = out_channels // (self.num_subset + 1)
         self.adaptive = adaptive
-        
+
         if adaptive:
             self.PA = nn.Parameter(torch.from_numpy(A.astype(np.float32)), requires_grad=True)
         else:
@@ -321,10 +325,10 @@ class HD_Gconv(nn.Module):
 
             self.conv_d.append(EdgeConv(inter_channels, inter_channels, k=5))
             self.conv.append(self.conv_d)
-            
+
         if self.att:
             self.aha = AHA(out_channels, num_layers=self.num_layers, CoM=CoM)
-            
+
         if residual:
             if in_channels != out_channels:
                 self.down = nn.Sequential(
@@ -335,7 +339,7 @@ class HD_Gconv(nn.Module):
                 self.down = lambda x: x
         else:
             self.down = lambda x: 0
-            
+
         self.bn = nn.BatchNorm2d(out_channels)
 
         # 7개 conv layer
@@ -349,7 +353,7 @@ class HD_Gconv(nn.Module):
         bn_init(self.bn, 1e-6)
 
     def forward(self, x):
-        
+
         A = self.PA
 
         out = []
@@ -363,28 +367,30 @@ class HD_Gconv(nn.Module):
             y_edge = self.conv[i][-1](x_down)
             y.append(y_edge)
             y = torch.cat(y, dim=1)
-            
+
             out.append(y)
-            
+
         out = torch.stack(out, dim=2)
         if self.att:
             out = self.aha(out)
         else:
             out = out.sum(dim=2, keepdim=False)
-            
+
         out = self.bn(out)
-        
+
         out += self.down(x)
         out = self.relu(out)
 
         return out
+
 
 class TCN_GCN_unit(nn.Module):
     def __init__(self, in_channels, out_channels, A, stride=1, residual=True, adaptive=True,
                  kernel_size=5, dilations=[1, 2], att=True, CoM=21):
         super(TCN_GCN_unit, self).__init__()
         self.gcn1 = HD_Gconv(in_channels, out_channels, A, adaptive=adaptive, att=att, CoM=CoM)
-        self.tcn1 = MultiScale_TemporalConv(out_channels, out_channels, kernel_size=kernel_size, stride=stride, dilations=dilations,
+        self.tcn1 = MultiScale_TemporalConv(out_channels, out_channels, kernel_size=kernel_size, stride=stride,
+                                            dilations=dilations,
                                             residual=False)
         self.relu = nn.ReLU(inplace=True)
         if not residual:
@@ -412,7 +418,7 @@ class Model(nn.Module):
             Graph = import_class(graph)
             self.graph = Graph(**graph_args)
             A, CoM = self.graph.A
-        
+
         self.dataset = 'NTU' if num_point == 25 else 'UCLA'
 
         self.num_class = num_class
@@ -425,14 +431,15 @@ class Model(nn.Module):
         self.l2 = TCN_GCN_unit(base_channels, base_channels, A, adaptive=adaptive, CoM=CoM)
         self.l3 = TCN_GCN_unit(base_channels, base_channels, A, adaptive=adaptive, CoM=CoM)
         self.l4 = TCN_GCN_unit(base_channels, base_channels, A, adaptive=adaptive, CoM=CoM)
-        self.l5 = TCN_GCN_unit(base_channels, base_channels*2, A, stride=2, adaptive=adaptive, CoM=CoM)
-        self.l6 = TCN_GCN_unit(base_channels*2, base_channels*2, A, adaptive=adaptive, CoM=CoM)
-        self.l7 = TCN_GCN_unit(base_channels*2, base_channels*2, A, adaptive=adaptive, CoM=CoM)
-        self.l8 = TCN_GCN_unit(base_channels*2, base_channels*4, A, stride=2, adaptive=adaptive, CoM=CoM)
-        self.l9 = TCN_GCN_unit(base_channels*4, base_channels*4, A, adaptive=adaptive, CoM=CoM)
-        self.l10 = TCN_GCN_unit(base_channels*4, base_channels*4, A, adaptive=adaptive, CoM=CoM)
+        self.l5 = TCN_GCN_unit(base_channels, base_channels * 2, A, stride=2, adaptive=adaptive, CoM=CoM)
+        self.l6 = TCN_GCN_unit(base_channels * 2, base_channels * 2, A, adaptive=adaptive, CoM=CoM)
+        self.l7 = TCN_GCN_unit(base_channels * 2, base_channels * 2, A, adaptive=adaptive, CoM=CoM)
+        self.l8 = TCN_GCN_unit(base_channels * 2, base_channels * 4, A, stride=2, adaptive=adaptive, CoM=CoM)
+        self.l9 = TCN_GCN_unit(base_channels * 4, base_channels * 4, A, adaptive=adaptive, CoM=CoM)
+        self.l10 = TCN_GCN_unit(base_channels * 4, base_channels * 4, A, adaptive=adaptive, CoM=CoM)
 
-        self.fc = nn.Linear(base_channels*4, num_class)
+        print(num_class)
+        self.fc = nn.Linear(base_channels * 4, num_class)
 
         nn.init.normal_(self.fc.weight, 0, math.sqrt(2. / num_class))
         bn_init(self.data_bn, 1)
@@ -446,7 +453,6 @@ class Model(nn.Module):
         x = rearrange(x, 'n c t v m -> n (m v c) t')
         x = self.data_bn(x)
         x = rearrange(x, 'n (m v c) t -> (n m) c t v', m=M, v=V)
-
         x = self.l1(x)
         x = self.l2(x)
         x = self.l3(x)
@@ -457,11 +463,10 @@ class Model(nn.Module):
         x = self.l8(x)
         x = self.l9(x)
         x = self.l10(x)
-
         # N*M,C,T,V
         c_new = x.size(1)
         x = x.view(N, M, c_new, -1)
         x = x.mean(3).mean(1)
         x = self.drop_out(x)
 
-        return self.fc(x) 
+        return self.fc(x)

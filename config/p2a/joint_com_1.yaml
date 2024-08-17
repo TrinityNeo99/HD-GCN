@@ -1,0 +1,54 @@
+num_worker: 8
+work_dir: ./work_dir/p2a/joint_CoM_1/
+model_saved_name: HD-GCN_baseline
+
+# feeder
+feeder: feeders.my_feeder.Feeder
+train_feeder_args:
+  data_path: ../dataset/2024-p2a/2s-AGCN+MSG3D-fomat/p2a/v1+v2/2024-6-14-14-class-128/train_data_joint.npy
+  label_path: ../dataset/2024-p2a/2s-AGCN+MSG3D-fomat/p2a/v1+v2/2024-6-14-14-class-128/train_label.pkl
+  split: train
+  debug: False
+  random_choose: False
+  random_shift: False
+  random_move: False
+  window_size: 64
+  normalization: False
+  random_rot: True
+  p_interval: [ 0.5, 1 ]
+  bone: False
+
+test_feeder_args:
+  data_path: ../dataset/2024-p2a/2s-AGCN+MSG3D-fomat/p2a/v1+v2/2024-6-14-14-class-128/val_data_joint.npy
+  label_path: ../dataset/2024-p2a/2s-AGCN+MSG3D-fomat/p2a/v1+v2/2024-6-14-14-class-128/val_label.pkl
+  split: test
+  window_size: 64
+  p_interval: [ 0.95 ]
+  bone: False
+  debug: False
+
+# model
+model: model.HDGCN.Model
+model_args:
+  num_class: 14
+  num_point: 17
+  num_person: 1
+  graph: graph.pingpong_coco_hierarchy.Graph
+  graph_args:
+    labeling_mode: 'spatial'
+    CoM: 1
+
+#optim
+weight_decay: 0.0004
+base_lr: 0.1
+warm_up_epoch: 5
+
+# training
+device: [ 1 ]
+batch_size: 64
+test_batch_size: 64
+num_epoch: 90
+nesterov: True
+
+# eval
+save_score: True
